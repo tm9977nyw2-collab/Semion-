@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Тренажёр биений</title>
+<style>
+:root{--bg:#e6ede9;--panel:#f4f8f5;--ink:#17302a;--mute:#5d746c;--brass:#a8761f;--knob:#fbfdfb;--line:#b9cac2;--act:#17302a;--actink:#f4f8f5;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#13241f;--panel:#1b3029;--ink:#e8f0ec;--mute:#93aca3;--brass:#e0a64a;--knob:#274539;--line:#35544a;--act:#e0a64a;--actink:#13241f}}
+:root[data-theme="dark"]{--bg:#13241f;--panel:#1b3029;--ink:#e8f0ec;--mute:#93aca3;--brass:#e0a64a;--knob:#274539;--line:#35544a;--act:#e0a64a;--actink:#13241f}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 Georgia,"Times New Roman",serif}
+main{max-width:640px;margin:0 auto;padding:20px 16px 32px}
+h1{font-size:26px;margin:4px 0 4px;font-weight:600}
+p.sub{margin:0 0 18px;color:var(--mute)}
+.voices{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.voice{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 8px 12px;text-align:center}
+.voice h2{font-size:17px;margin:0 0 6px;font-weight:600}
+.knobs{display:flex;justify-content:space-around;gap:4px}
+.k{display:flex;flex-direction:column;align-items:center;width:50%}
+.k svg{width:92px;max-width:100%;height:auto;touch-action:none;cursor:ns-resize;outline:none;-webkit-user-select:none;user-select:none}
+.k svg:focus-visible circle.body{stroke:var(--brass);stroke-width:3}
+.k .lab{font-size:13px;color:var(--mute);margin-top:2px}
+.k .val{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;min-height:28px}
+.hz{font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums;margin-top:6px}
+label.mute{display:inline-flex;gap:6px;align-items:center;font-size:14px;margin-top:8px;color:var(--mute)}
+.beat{margin:14px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;text-align:center}
+.beat .num{font-size:40px;font-weight:600;font-variant-numeric:tabular-nums;min-height:52px}
+.beat .cap{color:var(--mute);font-size:14px}
+.dot{width:18px;height:18px;border-radius:50%;background:var(--brass);margin:8px auto 0;opacity:.25}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+#scope,#micscope{display:block;width:100%;height:96px;margin-top:12px;border-radius:8px;background:var(--bg)}
+.scopecap{margin-top:6px;font-size:13px;color:var(--mute)}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:12px 16px;cursor:pointer;min-height:44px}
+button.main{background:var(--act);color:var(--actink);border-color:var(--act);flex:1;font-weight:600}
+button:focus-visible{outline:3px solid var(--brass);outline-offset:2px}
+.vol{display:flex;align-items:center;gap:10px;margin-top:14px;color:var(--mute);font-size:14px}
+.vol input{flex:1}
+.hint{margin-top:16px;color:var(--mute);font-size:14px}
+.presets{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 6px}
+.presets button{padding:8px 12px;min-height:40px;font-size:15px}
+.presets button.on{background:var(--act);color:var(--actink);border-color:var(--act)}
+.a4lab{align-self:center;color:var(--mute);font-size:14px}
+input[type=number]{font:inherit;width:76px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px}
+.opts{margin:6px 0 0}
+select{font:inherit;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+button:disabled{opacity:.5;cursor:default}
+.small{padding:6px 12px;min-height:36px;margin-left:14px}
+.k .sl{display:none;height:150px;width:32px;writing-mode:vertical-lr;direction:rtl;accent-color:var(--brass);margin:4px 0;touch-action:none}
+#voices.vmode .k svg{display:none}
+#voices.vmode .k .sl{display:block}
+.pm{display:flex;gap:4px;margin-top:6px}
+.pm button{width:34px;min-height:40px;padding:0;font-size:22px;line-height:1;touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.task{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.task .msg{margin:0 0 10px;min-height:22px}
+.task .row button{flex:1}
+</style>
+</head>
+<body>
+<main>
+<h1>Тренажёр биений</h1>
+<p class="sub">Две ноты, у каждой точная подстройка. Слушайте, как биения замедляются и ускоряются.</p>
+
+<div class="voices" id="voices"></div>
+
+<div class="beat">
+  <div class="num" id="num">—</div>
+  <div class="cap" id="cap">биений в секунду</div>
+  <div class="dot" id="dot"></div>
+  <canvas id="scope" role="img" aria-label="График биений"></canvas>
+  <div class="scopecap" id="scopecap">Линия прямая, пока биений нет. Каждое биение даёт всплеск. Чем реже всплески, тем точнее настройка.</div>
+</div>
+
+<div class="presets" id="a4row" role="group" aria-label="Строй"><span class="a4lab">Строй (ля), Гц:</span><input type="number" id="a4in" min="400" max="480" step="0.1" value="440" aria-label="Частота ля первой октавы"></div>
+<div class="presets" id="presets" role="group" aria-label="Интервалы"></div>
+<label class="mute opts"><input type="checkbox" id="inh" checked> учитывать негармоничность струн</label>
+<label class="mute opts" style="margin-left:14px">Звук
+  <select id="timbre"><option value="piano">Пианино (затухающий)</option><option value="sustain">Ровный тон</option></select></label>
+<button class="small" id="view" type="button">Вид: ручки</button>
+
+
+
+<div class="row">
+  <button class="main" id="play">Играть</button>
+  <button id="mic">Микрофон</button>
+  <button id="strike">Ударить</button>
+  <button id="hide">Скрыть значение</button>
+  <button id="reset">Сбросить подстройку</button>
+</div>
+<div class="beat" id="micbox" hidden>
+  <div class="cap" id="micstat">Запускаю микрофон…</div>
+  <div class="num" id="micnum">—</div>
+  <div class="cap">биений в секунду по микрофону</div>
+  <canvas id="micscope" role="img" aria-label="Биения с микрофона"></canvas>
+  <div class="scopecap">Выставите ручками ноту 1 (и ноту 2), которые играете, и ударьте их на рояле. График показывает громкость той самой гармоники, на которой слышны биения. Синтезатор лучше остановить, чтобы он не попадал в микрофон.</div>
+</div>
+
+<div class="task">
+  <p class="msg" id="taskmsg">Режим «Задание»: случайный интервал, вторая нота расстроена. Уберите биения подстройкой.</p>
+  <div class="row"><button id="newtask">Новое задание</button><button id="check" disabled>Проверить</button></div>
+</div>
+<div class="vol"><span>Громкость</span><input type="range" id="vol" min="0" max="100" value="45" aria-label="Громкость"></div>
+
+<p class="hint">Крутите ручку, потянув вверх или вниз, колесом мыши или стрелками на клавиатуре (Shift — крупнее шаг). Двойной щелчок возвращает ручку в исходное положение. Чтобы потренироваться на слух, скройте значение, настройте биения и потом откройте его, чтобы проверить себя. Нет звука на iPhone? Проверьте переключатель беззвучного режима сбоку и громкость, а после работы с микрофоном нажмите «Играть» ещё раз.</p>
+</main>
+
+<script>
+const NN=['до','до♯','ре','ре♯','ми','фа','фа♯','соль','соль♯','ля','ля♯','си'];
+const noteName=m=>NN[m%12]+(Math.floor(m/12)-1);
+const NS='http://www.w3.org/2000/svg';
+
+function makeKnob(parent,o){
+  const wrap=document.createElement('div');wrap.className='k';
+  const val=document.createElement('div');val.className='val';
+  const svg=document.createElementNS(NS,'svg');svg.setAttribute('viewBox','0 0 100 100');
+  svg.setAttribute('tabindex','0');svg.setAttribute('role','slider');svg.setAttribute('aria-label',o.label);
+  svg.setAttribute('aria-valuemin',o.min);svg.setAttribute('aria-valuemax',o.max);
+  svg.innerHTML='<circle class="body" cx="50" cy="50" r="38" fill="var(--knob)" stroke="var(--line)" stroke-width="2"/><g id="ticks"></g><line class="ind" x1="50" y1="50" x2="50" y2="18" stroke="var(--brass)" stroke-width="6" stroke-linecap="round"/><circle cx="50" cy="50" r="6" fill="var(--brass)"/>';
+  const ind=svg.querySelector('.ind');
+  const lab=document.createElement('div');lab.className='lab';lab.textContent=o.label;
+  const sl=document.createElement('input');sl.type='range';sl.className='sl';sl.min=o.min;sl.max=o.max;sl.step=o.step||0.5;sl.setAttribute('orient','vertical');sl.setAttribute('aria-label',o.label);
+  const bar=document.createElement('div');bar.className='pm';
+  wrap.append(val,svg,sl,lab,bar);parent.append(wrap);
+  const k={value:o.value,min:o.min,max:o.max,onchange:o.onchange,mask:false,maskBase:0};
+  const span=o.max-o.min;
+  k.set=(v,silent)=>{
+    v=Math.min(o.max,Math.max(o.min,o.step?Math.round(v/o.step)*o.step:v));
+    k.value=v;
+    const pos=k.mask?Math.max(0,Math.min(1,0.5+(v-k.maskBase)/span)):(v-o.min)/span;
+    ind.setAttribute('transform','rotate('+(-135+270*pos)+' 50 50)');sl.value=o.min+pos*span;
+    val.textContent=k.mask?'?':o.fmt(v);svg.setAttribute('aria-valuenow',k.mask?0:v);svg.setAttribute('aria-valuetext',k.mask?'скрыто':o.fmt(v));
+    if(!silent&&k.onchange)k.onchange(v);
+  };
+  let y0=null,v0=0;
+  svg.addEventListener('pointerdown',e=>{y0=e.clientY;v0=k.value;svg.setPointerCapture(e.pointerId);svg.focus();e.preventDefault()});
+  svg.addEventListener('pointermove',e=>{if(y0===null)return;k.set(v0+(y0-e.clientY)/(o.pxFull||220)*span)});
+  const up=()=>{y0=null};svg.addEventListener('pointerup',up);svg.addEventListener('pointercancel',up);
+  svg.addEventListener('wheel',e=>{e.preventDefault();k.set(k.value+(e.deltaY<0?1:-1)*(o.step||span/200)*(e.shiftKey?5:1))},{passive:false});
+  svg.addEventListener('keydown',e=>{
+    const d={ArrowUp:1,ArrowRight:1,ArrowDown:-1,ArrowLeft:-1}[e.key];
+    if(d){k.set(k.value+d*(o.step||0.5)*(e.shiftKey?5:1));e.preventDefault()}
+  });
+  svg.addEventListener('dblclick',()=>k.set(o.value));
+  sl.addEventListener('input',()=>{const p=(+sl.value-o.min)/span;k.set(k.mask?k.maskBase+(p-0.5)*span:o.min+p*span)});
+  [['−',-1,'Меньше'],['+',1,'Больше']].forEach(([txt,dir,al])=>{
+    const b=document.createElement('button');b.type='button';b.textContent=txt;b.setAttribute('aria-label',al+': '+o.label);
+    let to=null,iv=null;
+    const stop=()=>{clearTimeout(to);clearInterval(iv);to=iv=null};
+    const go=()=>{const before=k.value;k.set(k.value+dir*(o.step||0.5));if(k.value===before)stop()};
+    b.addEventListener('pointerdown',e=>{
+      e.preventDefault();stop();
+      try{b.setPointerCapture(e.pointerId)}catch(_){}
+      go();to=setTimeout(()=>{iv=setInterval(go,90)},400);
+    });
+    ['pointerup','pointercancel','lostpointercapture','pointerleave'].forEach(ev=>b.addEventListener(ev,stop));
+    addEventListener('pointerup',stop);addEventListener('pointercancel',stop);addEventListener('blur',stop);
+    b.addEventListener('contextmenu',e=>e.preventDefault());
+    b.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();go()}});
+    bar.append(b);
+  });
+  k.set(o.value,true);
+  return k;
+}
+
+const state=[{midi:60,cents:0,on:true},{midi:67,cents:0,on:true}];
+let A4=440;
+const freq=s=>A4*Math.pow(2,(s.midi-69)/12+s.cents/1200);
+let inh=true;
+const Bc=m=>0.0002*Math.pow(2,Math.abs(m-55)/12);
+const pf=(i,n)=>freq(state[i])*n*Math.sqrt(1+(inh?Bc(state[i].midi):0)*n*n);
+const knobs=[];
+const voicesEl=document.getElementById('voices');
+const hzEls=[];
+state.forEach((s,i)=>{
+  const box=document.createElement('div');box.className='voice';
+  box.innerHTML='<h2>Нота '+(i+1)+'</h2><div class="knobs"></div><div class="hz"></div><label class="mute"><input type="checkbox" checked> звучит</label>';
+  voicesEl.append(box);
+  const kn=box.querySelector('.knobs');
+  const kNote=makeKnob(kn,{label:'Нота',min:21,max:108,step:1,value:s.midi,pxFull:600,fmt:noteName,onchange:v=>{s.midi=v;update()}});
+  const kFine=makeKnob(kn,{label:'Подстройка',min:-50,max:50,step:0.5,value:0,pxFull:260,fmt:v=>(v>0?'+':'')+v.toFixed(1)+' ц',onchange:v=>{s.cents=v;update()}});
+  knobs.push(kNote,kFine);
+  hzEls.push(box.querySelector('.hz'));
+  box.querySelector('input').addEventListener('change',e=>{s.on=e.target.checked;applyGains()});
+});
+
+// Audio
+let ctx=null,master=null,voices=[];
+const NP=8;
+function build(){
+  ctx=new (window.AudioContext||window.webkitAudioContext)();
+  master=ctx.createGain();master.gain.value=0;master.connect(ctx.destination);
+  state.forEach((s,i)=>{
+    const g=ctx.createGain();g.connect(master);
+    const parts=[],pgs=[];
+    for(let n=1;n<=NP;n++){
+      const o=ctx.createOscillator(),pg=ctx.createGain();
+      o.type='sine';pg.gain.value=1/Math.pow(n,1.15);
+      o.connect(pg);pg.connect(g);o.start();parts.push(o);pgs.push(pg);
+    }
+    voices.push({g,parts,pgs});
+  });
+  update();applyGains();applyTimbre();
+}
+function update(){
+  const f=state.map(freq);
+  state.forEach((s,i)=>{
+    hzEls[i].textContent=(taskActive&&i===1)?'? Гц':f[i].toFixed(2)+' Гц';
+    if(ctx)voices[i].parts.forEach((o,n)=>o.frequency.setTargetAtTime(pf(i,n+1),ctx.currentTime,0.02));
+  });
+  showBeat(f);
+}
+function applyGains(){
+  if(!ctx)return;
+  state.forEach((s,i)=>voices[i].g.gain.setTargetAtTime(s.on?0.22:0,ctx.currentTime,0.03));
+}
+let playing=false;
+function setVol(){if(ctx)master.gain.setTargetAtTime(playing?document.getElementById('vol').value/100*0.9:0,ctx.currentTime,0.05)}
+
+// Beat rate: closest pair of partials n*f1 ~ m*f2 (low partials)
+let hidden=false,beatHz=0,beatValid=false,pairN=1,pairM=1;
+function showBeat(f){
+  let best=null;
+  for(let n=1;n<=6;n++)for(let m=1;m<=6;m++){
+    const a=pf(0,n),b=pf(1,m),rel=Math.abs(a-b)/Math.min(a,b);
+    const w=rel+0.004*(n+m);
+    if(!best||w<best.w)best={w,n,m,d:Math.abs(a-b)};
+  }
+  beatHz=best.d;beatValid=true;pairN=best.n;pairM=best.m;
+  const num=document.getElementById('num'),cap=document.getElementById('cap');
+  if(best.d>20||best.w>0.06){num.textContent=hidden?'?':'—';cap.textContent=hidden?'значение скрыто':'интервал далёк от чистого: биения не определены';beatHz=0;beatValid=false}
+  else{
+    num.textContent=hidden?'?':best.d.toFixed(2).replace('.',',');
+    cap.textContent=hidden?'значение скрыто':'биений в секунду — совпадают '+best.n+'-я гармоника ноты 1 и '+best.m+'-я ноты 2 (≈ '+Math.round(pf(0,best.n))+' Гц, '+noteName(Math.round(69+12*Math.log2(pf(0,best.n)/A4)))+')';
+  }
+  if(!playing||!beatHz)dotOff();
+  if(!playing)drawScope();
+}
+// Beat blinker
+const dot=document.getElementById('dot');let raf=null,t0=0;
+function dotOff(){dot.style.opacity=.25;if(raf){cancelAnimationFrame(raf);raf=null}}
+function tick(t){
+  if(!playing||!beatHz||hidden){dotOff();return}
+  const ph=((t-t0)/1000*beatHz)%1;dot.style.opacity=.25+.75*(0.5-0.5*Math.cos(2*Math.PI*ph));
+  raf=requestAnimationFrame(tick);
+}
+function kick(){if(!raf&&playing&&beatHz&&!hidden){t0=performance.now();raf=requestAnimationFrame(tick)}}
+
+const playBtn=document.getElementById('play');
+playBtn.onclick=async()=>{
+  try{if(navigator.audioSession)navigator.audioSession.type='playback'}catch(_){}
+  if(!ctx)build();
+  if(ctx.state!=='running'){try{await ctx.resume()}catch(_){}}
+  if(ctx.state!=='running'){
+    try{ctx.close()}catch(_){}
+    ctx=null;voices=[];build();
+    try{await ctx.resume()}catch(_){}
+    if(ctx.state!=='running'){playBtn.textContent='Звук не запустился: нажмите ещё раз';return}
+  }
+  playing=!playing;playBtn.textContent=playing?'Остановить':'Играть';setVol();applyTimbre();update();kick();scopeStart();
+};
+document.getElementById('vol').oninput=setVol;
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&ctx&&playing&&ctx.state!=='running')ctx.resume().catch(()=>{})});
+
+// Live beat strip: flat line, a spike at every beat
+let srun=false,slast=0,bph=0,acc=0;
+const HN=500,hist=new Float32Array(HN);
+const cv=document.getElementById('scope'),sc=cv.getContext('2d');
+function sizeScope(){
+  const r=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  if(!w)return;cv.width=Math.round(w*r);cv.height=Math.round(h*r);sc.setTransform(r,0,0,r,0,0);
+}
+function drawScope(){
+  const w=cv.clientWidth,h=cv.clientHeight;if(!w)return;
+  const cs=getComputedStyle(document.documentElement),col=cs.getPropertyValue('--brass').trim(),ln=cs.getPropertyValue('--line').trim(),mu=cs.getPropertyValue('--mute').trim();
+  sc.clearRect(0,0,w,h);
+  const base=h-14,amp=h-28;
+  sc.strokeStyle=ln;sc.lineWidth=1;sc.beginPath();sc.moveTo(0,base);sc.lineTo(w,base);sc.stroke();
+  const both=state[0].on&&state[1].on;
+  if(!both||!beatValid){
+    sc.fillStyle=mu;sc.font='14px Georgia,serif';sc.textAlign='center';
+    sc.fillText(!both?'звучит одна нота: биений нет':'биения не определены',w/2,base-amp/2);return;
+  }
+  sc.beginPath();
+  for(let i=0;i<HN;i++){const x=i/(HN-1)*w,y=base-hist[i]*amp;i?sc.lineTo(x,y):sc.moveTo(x,y)}
+  sc.lineTo(w,base);sc.lineTo(0,base);sc.closePath();
+  sc.globalAlpha=.25;sc.fillStyle=col;sc.fill();sc.globalAlpha=1;
+  sc.strokeStyle=col;sc.lineWidth=2.5;sc.lineJoin='round';
+  sc.beginPath();
+  for(let i=0;i<HN;i++){const x=i/(HN-1)*w,y=base-hist[i]*amp;i?sc.lineTo(x,y):sc.moveTo(x,y)}
+  sc.stroke();
+}
+function scopeFrame(t){
+  if(!playing){srun=false;return}
+  if(slast)acc+=Math.min(0.25,(t-slast)/1000);slast=t;
+  const d=(state[0].on&&state[1].on&&beatValid)?beatHz:0;
+  const sg=d>0?Math.min(0.05,0.3/d):1;
+  while(acc>=0.016){
+    acc-=0.016;bph+=d*0.016;
+    let v=0;
+    if(d>=0.02){const tt=(bph-Math.round(bph))/d;v=Math.exp(-tt*tt/(2*sg*sg))}
+    hist.copyWithin(0,1);hist[HN-1]=v;
+  }
+  drawScope();
+  requestAnimationFrame(scopeFrame);
+}
+function scopeStart(){if(!srun){srun=true;slast=0;requestAnimationFrame(scopeFrame)}}
+
+// Microphone mode: band-pass around the beating partial, envelope + beat rate of a real piano
+let micOn=false,micCtx=null,micAn=null,micEnv=null,bp=null,micStream=null,mspec=null,mtbuf=null;
+let mlast=0,macc=0,mfreqT=0,mrateT=0,mpeaks=[],mfp=0,mdb=-200;
+const MH=500,mh=new Float32Array(MH),msm=new Float32Array(MH);
+const mcv=document.getElementById('micscope'),mc=mcv.getContext('2d');
+const micBox=document.getElementById('micbox'),micBtn=document.getElementById('mic');
+const micStat=document.getElementById('micstat'),micNum=document.getElementById('micnum');
+function sizeMic(){
+  const r=window.devicePixelRatio||1,w=mcv.clientWidth,h=mcv.clientHeight;
+  if(!w)return;mcv.width=Math.round(w*r);mcv.height=Math.round(h*r);mc.setTransform(r,0,0,r,0,0);
+}
+addEventListener('resize',sizeMic);
+function drawMic(){
+  const w=mcv.clientWidth,h=mcv.clientHeight;if(!w)return;
+  const cs=getComputedStyle(document.documentElement),col=cs.getPropertyValue('--brass').trim(),ln=cs.getPropertyValue('--line').trim();
+  mc.clearRect(0,0,w,h);
+  const base=h-10,amp=h-22;
+  mc.strokeStyle=ln;mc.lineWidth=1;mc.beginPath();mc.moveTo(0,base);mc.lineTo(w,base);mc.stroke();
+  let mx=1e-4;for(let i=0;i<MH;i++)if(msm[i]>mx)mx=msm[i];
+  mc.beginPath();
+  for(let i=0;i<MH;i++){const x=i/(MH-1)*w,y=base-msm[i]/mx*amp;i?mc.lineTo(x,y):mc.moveTo(x,y)}
+  mc.lineTo(w,base);mc.lineTo(0,base);mc.closePath();
+  mc.globalAlpha=.25;mc.fillStyle=col;mc.fill();mc.globalAlpha=1;
+  mc.strokeStyle=col;mc.lineWidth=2.5;mc.lineJoin='round';
+  mc.beginPath();
+  for(let i=0;i<MH;i++){const x=i/(MH-1)*w,y=base-msm[i]/mx*amp;i?mc.lineTo(x,y):mc.moveTo(x,y)}
+  mc.stroke();
+  mc.fillStyle=col;
+  mpeaks.forEach(i=>{mc.beginPath();mc.arc(i/(MH-1)*w,base-msm[i]/mx*amp,4,0,6.3);mc.fill()});
+}
+function findPeaks(){
+  let mx=0;for(let i=0;i<MH;i++)if(msm[i]>mx)mx=msm[i];
+  const out=[];if(mx<0.002)return out;
+  let up=true,ext=msm[0],ei=0;
+  for(let i=1;i<MH;i++){
+    const v=msm[i];
+    if(up){
+      if(v>ext){ext=v;ei=i}
+      else if(v<ext*0.88){if(ext>=0.25*mx)out.push(ei);up=false;ext=v;ei=i}
+    }else{
+      if(v<ext){ext=v;ei=i}
+      else if(v>ext+0.12*Math.max(v,mx*0.3)){up=true;ext=v;ei=i}
+    }
+  }
+  return out;
+}
+function micFrame(t){
+  if(!micOn)return;
+  if(mlast)macc+=Math.min(0.25,(t-mlast)/1000);mlast=t;
+  if(t-mfreqT>120){
+    mfreqT=t;
+    const fa=pf(0,pairN),bw=micCtx.sampleRate/micAn.fftSize;
+    micAn.getFloatFrequencyData(mspec);
+    const lo=Math.max(1,Math.floor(fa*0.97/bw)),hi=Math.min(mspec.length-2,Math.ceil(fa*1.03/bw));
+    let bi=lo;for(let i=lo;i<=hi;i++)if(mspec[i]>mspec[bi])bi=i;
+    const a=mspec[bi-1],b=mspec[bi],c=mspec[bi+1],den=a-2*b+c,off=den?0.5*(a-c)/den:0;
+    mfp=(bi+off)*bw;mdb=b;
+    bp.frequency.setTargetAtTime(mfp,micCtx.currentTime,0.05);
+    bp.Q.setTargetAtTime(Math.max(6,Math.min(60,mfp/20)),micCtx.currentTime,0.05);
+    micStat.textContent='Слушаю гармонику около '+Math.round(mfp)+' Гц ('+noteName(Math.round(69+12*Math.log2(mfp/A4)))+')'+(mdb<-75?' — сигнал слабый, поднесите микрофон ближе или ударьте сильнее':'');
+  }
+  while(macc>=0.016){
+    macc-=0.016;micEnv.getFloatTimeDomainData(mtbuf);
+    let m=0;for(let i=0;i<mtbuf.length;i++){const v=Math.abs(mtbuf[i]);if(v>m)m=v}
+    mh.copyWithin(0,1);mh[MH-1]=m;
+  }
+  for(let i=0;i<MH;i++){let s=0,n=0;for(let j=i-2;j<=i+2;j++)if(j>=0&&j<MH){s+=mh[j];n++}msm[i]=s/n}
+  if(t-mrateT>250){
+    mrateT=t;mpeaks=findPeaks();
+    const p=mpeaks;
+    micNum.textContent=(p.length>=3&&mdb>=-75)?(((p.length-1)/((p[p.length-1]-p[0])*0.016)).toFixed(1).replace('.',',')):'—';
+  }
+  drawMic();
+  requestAnimationFrame(micFrame);
+}
+async function micStart(){
+  try{
+    try{if(navigator.audioSession)navigator.audioSession.type='play-and-record'}catch(_){}
+    micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  }catch(e){
+    clearTimeout(micTimer);micBox.hidden=false;micStat.textContent='Нет доступа к микрофону ('+(e&&e.name||'ошибка')+'). Разрешите его в браузере. Во встроенном просмотре приложения он может быть запрещён: откройте ссылку в обычном браузере.';
+    return;
+  }
+  micCtx=new (window.AudioContext||window.webkitAudioContext)();await micCtx.resume();
+  const src=micCtx.createMediaStreamSource(micStream);
+  micAn=micCtx.createAnalyser();micAn.fftSize=16384;micAn.smoothingTimeConstant=0;
+  bp=micCtx.createBiquadFilter();bp.type='bandpass';bp.frequency.value=800;bp.Q.value=30;
+  micEnv=micCtx.createAnalyser();micEnv.fftSize=2048;
+  src.connect(micAn);src.connect(bp);bp.connect(micEnv);
+  mspec=new Float32Array(micAn.frequencyBinCount);mtbuf=new Float32Array(micEnv.fftSize);
+  mh.fill(0);msm.fill(0);mpeaks=[];mlast=0;macc=0;
+  micOn=true;clearTimeout(micTimer);micBtn.textContent='Выключить микрофон';micBox.hidden=false;micNum.textContent='—';
+  sizeMic();requestAnimationFrame(micFrame);
+}
+function micStop(){
+  micOn=false;
+  if(micStream)micStream.getTracks().forEach(t=>t.stop());
+  if(micCtx)micCtx.close();
+  micStream=micCtx=null;micBtn.textContent='Микрофон';micBox.hidden=true;
+  try{if(navigator.audioSession)navigator.audioSession.type='playback'}catch(_){}
+}
+let micTimer=null;
+micBtn.onclick=()=>{
+  if(micOn){micStop();return}
+  if(playing)playBtn.click();
+  micBox.hidden=false;micNum.textContent='—';
+  micStat.textContent='Запрашиваю доступ к микрофону…';
+  micBox.scrollIntoView({block:'nearest'});
+  clearTimeout(micTimer);
+  micTimer=setTimeout(()=>{if(!micOn)micStat.textContent='Браузер не отвечает на запрос микрофона. Скорее всего, во встроенном просмотре он запрещён. Откройте ссылку в Safari или Chrome.'},6000);
+  micStart().catch(e=>{micStat.textContent='Ошибка микрофона: '+(e&&e.name||e)});
+};
+addEventListener('resize',()=>{sizeScope();drawScope()});
+sizeScope();drawScope();
+
+// Piano timbre: each partial has its own two-stage decay (high partials die faster)
+let timbre='piano',loopT=null;
+const D=4,strikeBtn=document.getElementById('strike');
+function strike(){
+  if(!ctx)return;
+  const t=ctx.currentTime;
+  voices.forEach(v=>v.pgs.forEach((pg,idx)=>{
+    const n=idx+1,a=1.3/n,t1=0.35/Math.pow(n,0.5),t2=3.5/Math.pow(n,0.4);
+    const N=200,c=new Float32Array(N);
+    for(let j=0;j<N;j++){
+      const x=j*D/(N-1);
+      c[j]=a*(0.7*Math.exp(-x/t1)+0.3*Math.exp(-x/t2))*Math.min(1,x/0.004)*Math.min(1,(D-x)/0.3);
+    }
+    pg.gain.cancelScheduledValues(t);
+    pg.gain.setValueCurveAtTime(c,t,D);
+  }));
+}
+function applyTimbre(){
+  clearInterval(loopT);loopT=null;
+  strikeBtn.disabled=timbre!=='piano';
+  if(!ctx)return;
+  const t=ctx.currentTime;
+  if(timbre==='sustain'){
+    voices.forEach(v=>v.pgs.forEach((pg,i)=>{pg.gain.cancelScheduledValues(t);pg.gain.setValueAtTime(1/Math.pow(i+1,1.15),t)}));
+  }else if(playing){
+    strike();loopT=setInterval(strike,4500);
+  }
+}
+document.getElementById('timbre').onchange=e=>{timbre=e.target.value;applyTimbre()};
+document.getElementById('view').onclick=e=>{const v=voicesEl.classList.toggle('vmode');e.target.textContent=v?'Вид: ползунки':'Вид: ручки'};
+strikeBtn.onclick=()=>{
+  if(!playing){playBtn.click();return}
+  if(timbre==='piano'){strike();clearInterval(loopT);loopT=setInterval(strike,4500)}
+};
+const hideBtn=document.getElementById('hide');
+function setHidden(h){hidden=h;hideBtn.textContent=hidden?'Показать значение':'Скрыть значение';
+  document.getElementById('scope').style.display=document.getElementById('scopecap').style.display=hidden?'none':'';
+  if(!hidden)setTimeout(()=>{sizeScope();drawScope()},0);
+  update();kick()}
+hideBtn.onclick=()=>setHidden(!hidden);
+document.getElementById('inh').onchange=e=>{inh=e.target.checked;update()};
+
+const IV=[{name:'Унисон',s:0,n:1,m:1},{name:'Малая терция',s:3,n:6,m:5},{name:'Большая терция',s:4,n:5,m:4},{name:'Кварта',s:5,n:4,m:3},{name:'Квинта',s:7,n:3,m:2},{name:'Октава',s:12,n:2,m:1}];
+let taskActive=false,taskIv=null;
+const a4in=document.getElementById('a4in'),a4btns=[];
+function setA4(v){
+  v=Math.min(480,Math.max(400,+v||440));A4=v;
+  if(document.activeElement!==a4in)a4in.value=v;
+  a4btns.forEach(b=>b.classList.toggle('on',+b.dataset.v===v));
+  update();
+}
+[440,441,442,443].forEach(v=>{
+  const b=document.createElement('button');b.type='button';b.textContent=v;b.dataset.v=v;
+  b.onclick=()=>{a4in.value=v;setA4(v)};
+  a4btns.push(b);document.getElementById('a4row').append(b);
+});
+a4in.addEventListener('input',()=>{if(a4in.value!=='')setA4(a4in.value)});
+a4in.addEventListener('change',()=>{a4in.value=A4});
+a4btns[0].classList.add('on');
+IV.forEach(iv=>{
+  const b=document.createElement('button');b.textContent=iv.name;
+  b.onclick=()=>{knobs[2].set(Math.min(108,state[0].midi+iv.s));knobs[1].set(0);knobs[3].set(0)};
+  document.getElementById('presets').append(b);
+});
+function pureCents(){
+  const iv=taskIv,B2=inh?Bc(state[1].midi):0;
+  const f2=pf(0,iv.n)/(iv.m*Math.sqrt(1+B2*iv.m*iv.m));
+  return 1200*Math.log2(f2/(A4*Math.pow(2,(state[1].midi-69)/12)));
+}
+const msg=document.getElementById('taskmsg'),chk=document.getElementById('check');
+document.getElementById('newtask').onclick=()=>{
+  taskActive=false;knobs[3].mask=false;
+  taskIv=IV[Math.floor(Math.random()*IV.length)];
+  const m1=48+Math.floor(Math.random()*25);
+  knobs[0].set(m1);knobs[1].set(0);knobs[2].set(m1+taskIv.s);knobs[3].set(0);
+  const t=pureCents(),off=(Math.random()<0.5?-1:1)*(6+Math.random()*12);
+  const st=Math.round(Math.max(-50,Math.min(50,t+off))*2)/2;
+  taskActive=true;knobs[3].maskBase=st;knobs[3].mask=true;
+  knobs[3].set(st);
+  chk.disabled=false;
+  msg.textContent='Интервал: '+taskIv.name.toLowerCase()+'. Нота 2 расстроена: крутите её подстройку, пока биения не исчезнут.';
+  setHidden(true);
+  if(!playing)playBtn.click();
+};
+chk.onclick=()=>{
+  if(!taskActive)return;
+  const e=state[1].cents-pureCents(),a=Math.abs(e);
+  taskActive=false;knobs[3].mask=false;knobs[3].set(knobs[3].value,true);
+  chk.disabled=true;setHidden(false);
+  const s=(e>0?'+':e<0?'−':'')+a.toFixed(1).replace('.',',')+' ц';
+  msg.textContent='Ошибка '+s+(a<=1?' — отлично.':a<=3?' — хорошо.':' — попробуйте ещё раз.');
+};
+document.getElementById('reset').onclick=()=>{[1,3].forEach(i=>knobs[i].set(0))};
+update();
+</script>
+</body>
+</html>
