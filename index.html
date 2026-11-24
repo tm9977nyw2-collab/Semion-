@@ -318,7 +318,7 @@ function scopeStart(){if(!srun){srun=true;slast=0;requestAnimationFrame(scopeFra
 
 // Microphone mode: band-pass around the beating partial, envelope + beat rate of a real piano
 let micOn=false,micCtx=null,micAn=null,micEnv=null,bp=null,micStream=null,mspec=null,mtbuf=null;
-let mlast=0,macc=0,mfreqT=0,mrateT=0,mpeaks=[],mfp=0,mdb=-200;
+let mlast=0,macc=0,mfreqT=0,mrateT=0,mpeaks=[],mfp=0,mdb=-200,mtgt=0,mfc=0;
 const MH=625,mh=new Float32Array(MH),msm=new Float32Array(MH);
 const mcv=document.getElementById('micscope'),mc=mcv.getContext('2d');
 const micBox=document.getElementById('micbox'),micBtn=document.getElementById('mic');
@@ -347,35 +347,35 @@ function drawMic(){
   mc.fillStyle=col;
   mpeaks.forEach(i=>{mc.beginPath();mc.arc(i/(MH-1)*w,base-msm[i]/mx*amp,4,0,6.3);mc.fill()});
 }
-function findPeaks(){
-  let mx=0;for(let i=0;i<MH;i++)if(msm[i]>mx)mx=msm[i];
-  const out=[];if(mx<0.002)return out;
-  let up=true,ext=msm[0],ei=0;
-  for(let i=1;i<MH;i++){
-    const v=msm[i];
-    if(up){
-      if(v>ext){ext=v;ei=i}
-      else if(v<ext*0.88){if(ext>=0.25*mx)out.push(ei);up=false;ext=v;ei=i}
-    }else{
-      if(v<ext){ext=v;ei=i}
-      else if(v>ext+0.12*Math.max(v,mx*0.3)){up=true;ext=v;ei=i}
-    }
+
+const rh=[],et=[],ev=[];
+// Beat rate from the autocorrelation of the (log, detrended) envelope since the last strike
+function estRate(){
+  let mx=0,mi=0;for(let i=0;i<MH;i++)if(msm[i]>mx){mx=msm[i];mi=i}
+  if(mx<0.002)return null;
+  let b=MH-1;while(b>mi&&msm[b]<0.06*mx)b--;
+  const a=Math.min(MH-1,mi+19),n=b-a+1;
+  if(n<160)return {short:true};
+  const y=new Float32Array(n);
+  for(let i=0;i<n;i++)y[i]=Math.log(Math.max(msm[a+i],0.03*mx));
+  let sx=0,sy=0,sxx=0,sxy=0;
+  for(let i=0;i<n;i++){sx+=i;sy+=y[i];sxx+=i*i;sxy+=i*y[i]}
+  const sl=(n*sxy-sx*sy)/(n*sxx-sx*sx),ic=(sy-sl*sx)/n;
+  for(let i=0;i<n;i++)y[i]=(y[i]-(ic+sl*i))*(0.5-0.5*Math.cos(2*Math.PI*(i+0.5)/n));
+  const kmin=8,kmax=Math.min(312,Math.floor(n/2));
+  if(kmax<=kmin+2)return {short:true};
+  const r=new Float32Array(kmax+2);
+  for(let k=0;k<=kmax+1&&k<n-2;k++){
+    let s=0,e1=0,e2=0;
+    for(let i=0;i+k<n;i++){s+=y[i]*y[i+k];e1+=y[i]*y[i];e2+=y[i+k]*y[i+k]}
+    r[k]=s/Math.sqrt((e1*e2)||1);
   }
-  return out;
-}
-const rh=[];
-// Beat rate: least-squares fit of peak times (parabolic peak refinement), beats per second
-function estRate(p){
-  if(p.length<3)return null;
-  const ts=p.map(i=>{
-    const a=msm[i-1]??msm[i],b=msm[i],c=msm[i+1]??msm[i],den=a-2*b+c;
-    const off=den<0?Math.max(-0.5,Math.min(0.5,0.5*(a-c)/den)):0;
-    return (i+off)*0.016;
-  });
-  const n=ts.length;let sk=0,st=0,skk=0,skt=0;
-  for(let k=0;k<n;k++){sk+=k;st+=ts[k];skk+=k*k;skt+=k*ts[k]}
-  const slope=(n*skt-sk*st)/(n*skk-sk*sk);
-  return slope>0?{rate:1/slope,n:n,span:ts[n-1]-ts[0]}:null;
+  const pk=[];let best=0;
+  for(let k=kmin+1;k<=kmax;k++)if(r[k]>r[k-1]&&r[k]>=r[k+1]&&r[k]>0.1){pk.push(k);if(r[k]>best)best=r[k]}
+  if(!pk.length)return null;
+  const k0=pk.find(k=>r[k]>=0.6*best);
+  const A=r[k0-1],B=r[k0],C=r[k0+1],den=A-2*B+C,off=den<0?Math.max(-0.5,Math.min(0.5,0.5*(A-C)/den)):0;
+  return {rate:1/((k0+off)*0.016),conf:Math.max(0,Math.min(1,B)),n:n};
 }
 function micFrame(t){
   if(!micOn)return;
@@ -389,27 +389,36 @@ function micFrame(t){
     const a=mspec[bi-1],b=mspec[bi],c=mspec[bi+1],den=a-2*b+c,off=den?0.5*(a-c)/den:0;
     mfp=(bi+off)*bw;mdb=b;
     lvlEl.style.width=Math.max(0,Math.min(100,(mdb+90)/60*100))+'%';
-    bp.frequency.setTargetAtTime(mfp,micCtx.currentTime,0.05);
-    bp.Q.setTargetAtTime(Math.max(6,Math.min(60,mfp/20)),micCtx.currentTime,0.05);
+    if(Math.abs(fa-mtgt)>fa*0.004){mtgt=fa;mfc=0;bp.frequency.setTargetAtTime(fa,micCtx.currentTime,0.05)}
+    if(mdb>-70&&(mfc===0||Math.abs(mfp-mfc)>mfc*0.012)){mfc=mfp;bp.frequency.setTargetAtTime(mfc,micCtx.currentTime,0.3)}
+    bp.Q.setTargetAtTime(Math.max(6,Math.min(60,(mfc||fa)/20)),micCtx.currentTime,0.1);
     micStat.textContent='Слушаю гармонику около '+Math.round(mfp)+' Гц ('+noteName(Math.round(69+12*Math.log2(mfp/A4)))+')'+(mdb<-75?' — сигнал слабый, поднесите микрофон ближе или ударьте сильнее':'');
   }
-  while(macc>=0.016){
-    macc-=0.016;micEnv.getFloatTimeDomainData(mtbuf);
+  micEnv.getFloatTimeDomainData(mtbuf);
+  {
     let m=0;for(let i=0;i<mtbuf.length;i++){const v=Math.abs(mtbuf[i]);if(v>m)m=v}
-    mh.copyWithin(0,1);mh[MH-1]=m;
+    et.push(t/1000);ev.push(m);
+    while(et.length>1&&et[0]<t/1000-(MH*0.016+1)){et.shift();ev.shift()}
+    const now=t/1000;let j=0;
+    for(let i=0;i<MH;i++){
+      const tt=now-(MH-1-i)*0.016;
+      while(j<et.length-2&&et[j+1]<tt)j++;
+      if(et.length<2||tt<et[0]){msm[i]=0;continue}
+      const f=(tt-et[j])/((et[j+1]-et[j])||1);
+      msm[i]=ev[j]+(ev[j+1]-ev[j])*Math.min(1,Math.max(0,f));
+    }
   }
-  for(let i=0;i<MH;i++){let s=0,n=0;for(let j=i-2;j<=i+2;j++)if(j>=0&&j<MH){s+=mh[j];n++}msm[i]=s/n}
   if(t-mrateT>250){
-    mrateT=t;mpeaks=findPeaks();
-    const r=estRate(mpeaks);
-    if(r&&mdb>=-75){
-      rh.push(r.rate);if(rh.length>5)rh.shift();
-      const s=[...rh].sort((x,y)=>x-y);
-      micNum.textContent=s[s.length>>1].toFixed(2).replace('.',',');
-      micCap.textContent='биений в секунду по микрофону (измерено по '+r.n+' биениям за '+r.span.toFixed(1).replace('.',',')+' с)';
+    mrateT=t;mpeaks=[];
+    const r=estRate(),base='биений в секунду по микрофону';
+    if(r&&r.rate&&mdb>=-75){
+      rh.push(r.rate);if(rh.length>6)rh.shift();
+      const s=[...rh].sort((x,y)=>x-y),med=s[s.length>>1],spr=(s[s.length-1]-s[0])/2;
+      micNum.textContent=med.toFixed(2).replace('.',',');
+      micCap.textContent=base+' (разброс ±'+spr.toFixed(2).replace('.',',')+', уверенность '+Math.round(r.conf*100)+'%'+(r.conf<0.4?' — низкая, результат неточный':'')+')';
     }else{
       rh.length=0;micNum.textContent='—';
-      micCap.textContent='биений в секунду по микрофону (пока не удаётся измерить: нужно хотя бы 3 биения)';
+      micCap.textContent=base+(r&&r.short?' (звук слишком короткий: нужно хотя бы 3 секунды после удара)':' (пока не удаётся измерить)');
     }
   }
   drawMic();
@@ -430,7 +439,7 @@ async function micStart(){
   micEnv=micCtx.createAnalyser();micEnv.fftSize=2048;
   src.connect(micAn);src.connect(bp);bp.connect(micEnv);
   mspec=new Float32Array(micAn.frequencyBinCount);mtbuf=new Float32Array(micEnv.fftSize);
-  mh.fill(0);msm.fill(0);mpeaks=[];mlast=0;macc=0;rh.length=0;
+  mh.fill(0);msm.fill(0);mpeaks=[];mlast=0;macc=0;rh.length=0;et.length=0;ev.length=0;mfc=0;mtgt=0;
   micOn=true;clearTimeout(micTimer);micRec.hidden=false;lvlBox.hidden=false;micBtn.textContent='Выключить микрофон';micBox.hidden=false;micNum.textContent='—';
   sizeMic();requestAnimationFrame(micFrame);
 }
