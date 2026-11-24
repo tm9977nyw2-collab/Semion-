@@ -33,6 +33,13 @@ label.mute{display:inline-flex;gap:6px;align-items:center;font-size:14px;margin-
 .row{display:flex;gap:10px;flex-wrap:wrap}
 #scope,#micscope{display:block;width:100%;height:96px;margin-top:12px;border-radius:8px;background:var(--bg)}
 .scopecap{margin-top:6px;font-size:13px;color:var(--mute)}
+.rec{display:flex;align-items:center;justify-content:center;gap:8px;font-weight:600}
+.rec[hidden]{display:none}
+.recdot{width:12px;height:12px;border-radius:50%;background:#d33;animation:blink 1s ease-in-out infinite}
+@keyframes blink{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.recdot{animation:none}}
+.lvl{height:6px;border-radius:3px;background:var(--line);margin:8px auto 0;max-width:260px;overflow:hidden}
+.lvl i{display:block;height:100%;width:0;background:var(--brass)}
 button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:12px 16px;cursor:pointer;min-height:44px}
 button.main{background:var(--act);color:var(--actink);border-color:var(--act);flex:1;font-weight:600}
 button:focus-visible{outline:3px solid var(--brass);outline-offset:2px}
@@ -90,9 +97,11 @@ button:disabled{opacity:.5;cursor:default}
   <button id="reset">Сбросить подстройку</button>
 </div>
 <div class="beat" id="micbox" hidden>
+  <div class="rec" id="micrec" hidden><span class="recdot"></span><span>Идёт запись звука с микрофона</span></div>
+  <div class="lvl" id="lvlbox" hidden><i id="lvl"></i></div>
   <div class="cap" id="micstat">Запускаю микрофон…</div>
   <div class="num" id="micnum">—</div>
-  <div class="cap">биений в секунду по микрофону</div>
+  <div class="cap" id="miccap">биений в секунду по микрофону</div>
   <canvas id="micscope" role="img" aria-label="Биения с микрофона"></canvas>
   <div class="scopecap">Выставите ручками ноту 1 (и ноту 2), которые играете, и ударьте их на рояле. График показывает громкость той самой гармоники, на которой слышны биения. Синтезатор лучше остановить, чтобы он не попадал в микрофон.</div>
 </div>
@@ -310,10 +319,11 @@ function scopeStart(){if(!srun){srun=true;slast=0;requestAnimationFrame(scopeFra
 // Microphone mode: band-pass around the beating partial, envelope + beat rate of a real piano
 let micOn=false,micCtx=null,micAn=null,micEnv=null,bp=null,micStream=null,mspec=null,mtbuf=null;
 let mlast=0,macc=0,mfreqT=0,mrateT=0,mpeaks=[],mfp=0,mdb=-200;
-const MH=500,mh=new Float32Array(MH),msm=new Float32Array(MH);
+const MH=625,mh=new Float32Array(MH),msm=new Float32Array(MH);
 const mcv=document.getElementById('micscope'),mc=mcv.getContext('2d');
 const micBox=document.getElementById('micbox'),micBtn=document.getElementById('mic');
 const micStat=document.getElementById('micstat'),micNum=document.getElementById('micnum');
+const micRec=document.getElementById('micrec'),lvlBox=document.getElementById('lvlbox'),lvlEl=document.getElementById('lvl'),micCap=document.getElementById('miccap');
 function sizeMic(){
   const r=window.devicePixelRatio||1,w=mcv.clientWidth,h=mcv.clientHeight;
   if(!w)return;mcv.width=Math.round(w*r);mcv.height=Math.round(h*r);mc.setTransform(r,0,0,r,0,0);
@@ -353,6 +363,20 @@ function findPeaks(){
   }
   return out;
 }
+const rh=[];
+// Beat rate: least-squares fit of peak times (parabolic peak refinement), beats per second
+function estRate(p){
+  if(p.length<3)return null;
+  const ts=p.map(i=>{
+    const a=msm[i-1]??msm[i],b=msm[i],c=msm[i+1]??msm[i],den=a-2*b+c;
+    const off=den<0?Math.max(-0.5,Math.min(0.5,0.5*(a-c)/den)):0;
+    return (i+off)*0.016;
+  });
+  const n=ts.length;let sk=0,st=0,skk=0,skt=0;
+  for(let k=0;k<n;k++){sk+=k;st+=ts[k];skk+=k*k;skt+=k*ts[k]}
+  const slope=(n*skt-sk*st)/(n*skk-sk*sk);
+  return slope>0?{rate:1/slope,n:n,span:ts[n-1]-ts[0]}:null;
+}
 function micFrame(t){
   if(!micOn)return;
   if(mlast)macc+=Math.min(0.25,(t-mlast)/1000);mlast=t;
@@ -364,6 +388,7 @@ function micFrame(t){
     let bi=lo;for(let i=lo;i<=hi;i++)if(mspec[i]>mspec[bi])bi=i;
     const a=mspec[bi-1],b=mspec[bi],c=mspec[bi+1],den=a-2*b+c,off=den?0.5*(a-c)/den:0;
     mfp=(bi+off)*bw;mdb=b;
+    lvlEl.style.width=Math.max(0,Math.min(100,(mdb+90)/60*100))+'%';
     bp.frequency.setTargetAtTime(mfp,micCtx.currentTime,0.05);
     bp.Q.setTargetAtTime(Math.max(6,Math.min(60,mfp/20)),micCtx.currentTime,0.05);
     micStat.textContent='Слушаю гармонику около '+Math.round(mfp)+' Гц ('+noteName(Math.round(69+12*Math.log2(mfp/A4)))+')'+(mdb<-75?' — сигнал слабый, поднесите микрофон ближе или ударьте сильнее':'');
@@ -376,8 +401,16 @@ function micFrame(t){
   for(let i=0;i<MH;i++){let s=0,n=0;for(let j=i-2;j<=i+2;j++)if(j>=0&&j<MH){s+=mh[j];n++}msm[i]=s/n}
   if(t-mrateT>250){
     mrateT=t;mpeaks=findPeaks();
-    const p=mpeaks;
-    micNum.textContent=(p.length>=3&&mdb>=-75)?(((p.length-1)/((p[p.length-1]-p[0])*0.016)).toFixed(1).replace('.',',')):'—';
+    const r=estRate(mpeaks);
+    if(r&&mdb>=-75){
+      rh.push(r.rate);if(rh.length>5)rh.shift();
+      const s=[...rh].sort((x,y)=>x-y);
+      micNum.textContent=s[s.length>>1].toFixed(2).replace('.',',');
+      micCap.textContent='биений в секунду по микрофону (измерено по '+r.n+' биениям за '+r.span.toFixed(1).replace('.',',')+' с)';
+    }else{
+      rh.length=0;micNum.textContent='—';
+      micCap.textContent='биений в секунду по микрофону (пока не удаётся измерить: нужно хотя бы 3 биения)';
+    }
   }
   drawMic();
   requestAnimationFrame(micFrame);
@@ -397,15 +430,15 @@ async function micStart(){
   micEnv=micCtx.createAnalyser();micEnv.fftSize=2048;
   src.connect(micAn);src.connect(bp);bp.connect(micEnv);
   mspec=new Float32Array(micAn.frequencyBinCount);mtbuf=new Float32Array(micEnv.fftSize);
-  mh.fill(0);msm.fill(0);mpeaks=[];mlast=0;macc=0;
-  micOn=true;clearTimeout(micTimer);micBtn.textContent='Выключить микрофон';micBox.hidden=false;micNum.textContent='—';
+  mh.fill(0);msm.fill(0);mpeaks=[];mlast=0;macc=0;rh.length=0;
+  micOn=true;clearTimeout(micTimer);micRec.hidden=false;lvlBox.hidden=false;micBtn.textContent='Выключить микрофон';micBox.hidden=false;micNum.textContent='—';
   sizeMic();requestAnimationFrame(micFrame);
 }
 function micStop(){
   micOn=false;
   if(micStream)micStream.getTracks().forEach(t=>t.stop());
   if(micCtx)micCtx.close();
-  micStream=micCtx=null;micBtn.textContent='Микрофон';micBox.hidden=true;
+  micRec.hidden=true;lvlBox.hidden=true;micStream=micCtx=null;micBtn.textContent='Микрофон';micBox.hidden=true;
   try{if(navigator.audioSession)navigator.audioSession.type='playback'}catch(_){}
 }
 let micTimer=null;
