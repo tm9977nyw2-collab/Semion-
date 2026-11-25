@@ -97,13 +97,14 @@ button:disabled{opacity:.5;cursor:default}
   <button id="reset">Сбросить подстройку</button>
 </div>
 <div class="beat" id="micbox" hidden>
-  <div class="rec" id="micrec" hidden><span class="recdot"></span><span>Идёт запись звука с микрофона</span></div>
+  <div class="rec" id="micrec" hidden><span class="recdot"></span><span id="micphase">Слушаю микрофон</span></div>
   <div class="lvl" id="lvlbox" hidden><i id="lvl"></i></div>
   <div class="cap" id="micstat">Запускаю микрофон…</div>
   <div class="num" id="micnum">—</div>
   <div class="cap" id="miccap">биений в секунду по микрофону</div>
   <canvas id="micscope" role="img" aria-label="Биения с микрофона"></canvas>
-  <div class="scopecap">Выставите ручками ноту 1 (и ноту 2), которые играете, и ударьте их на рояле. График показывает громкость той самой гармоники, на которой слышны биения. Синтезатор лучше остановить, чтобы он не попадал в микрофон.</div>
+  <div class="row" style="margin-top:12px"><button class="main" id="measure" disabled>Измерить: ударьте интервал</button></div>
+  <div class="scopecap">Выставите ручками ноту 1 (и ноту 2), которые играете. Нажмите «Измерить», ударьте интервал на рояле и дайте звуку звучать до 10 секунд. Результат считается один раз по всей записи. Синтезатор лучше остановить, чтобы он не попадал в микрофон.</div>
 </div>
 
 <div class="task">
@@ -316,48 +317,76 @@ function scopeFrame(t){
 }
 function scopeStart(){if(!srun){srun=true;slast=0;requestAnimationFrame(scopeFrame)}}
 
-// Microphone mode: band-pass around the beating partial, envelope + beat rate of a real piano
-let micOn=false,micCtx=null,micAn=null,micEnv=null,bp=null,micStream=null,mspec=null,mtbuf=null;
-let mlast=0,macc=0,mfreqT=0,mrateT=0,mpeaks=[],mfp=0,mdb=-200,mtgt=0,mfc=0;
-const MH=625,mh=new Float32Array(MH),msm=new Float32Array(MH);
+// Microphone mode: strike the interval, record up to 10 s of raw sound, analyse it once
+let micOn=false,micCtx=null,micEnv=null,bp=null,micStream=null,micProc=null,mtbuf=null,mSr=48000;
+let mstate='live',mTotal=0,mchunks=[],mOnset=0,mRecT0=0,mLowT=0,mPeak=0,mtgt=0,mfroz=null;
+const MH=625,msm=new Float32Array(MH),et=[],ev=[];
 const mcv=document.getElementById('micscope'),mc=mcv.getContext('2d');
 const micBox=document.getElementById('micbox'),micBtn=document.getElementById('mic');
 const micStat=document.getElementById('micstat'),micNum=document.getElementById('micnum');
 const micRec=document.getElementById('micrec'),lvlBox=document.getElementById('lvlbox'),lvlEl=document.getElementById('lvl'),micCap=document.getElementById('miccap');
+const micPhase=document.getElementById('micphase'),measBtn=document.getElementById('measure');
 function sizeMic(){
   const r=window.devicePixelRatio||1,w=mcv.clientWidth,h=mcv.clientHeight;
   if(!w)return;mcv.width=Math.round(w*r);mcv.height=Math.round(h*r);mc.setTransform(r,0,0,r,0,0);
 }
 addEventListener('resize',sizeMic);
-function drawMic(){
+function drawMic(arr,n){
   const w=mcv.clientWidth,h=mcv.clientHeight;if(!w)return;
   const cs=getComputedStyle(document.documentElement),col=cs.getPropertyValue('--brass').trim(),ln=cs.getPropertyValue('--line').trim();
   mc.clearRect(0,0,w,h);
   const base=h-10,amp=h-22;
   mc.strokeStyle=ln;mc.lineWidth=1;mc.beginPath();mc.moveTo(0,base);mc.lineTo(w,base);mc.stroke();
-  let mx=1e-4;for(let i=0;i<MH;i++)if(msm[i]>mx)mx=msm[i];
+  let mx=1e-6;for(let i=0;i<n;i++)if(arr[i]>mx)mx=arr[i];
+  const X=i=>i/(n-1)*w,Y=i=>base-arr[i]/mx*amp;
   mc.beginPath();
-  for(let i=0;i<MH;i++){const x=i/(MH-1)*w,y=base-msm[i]/mx*amp;i?mc.lineTo(x,y):mc.moveTo(x,y)}
+  for(let i=0;i<n;i++)i?mc.lineTo(X(i),Y(i)):mc.moveTo(X(i),Y(i));
   mc.lineTo(w,base);mc.lineTo(0,base);mc.closePath();
   mc.globalAlpha=.25;mc.fillStyle=col;mc.fill();mc.globalAlpha=1;
   mc.strokeStyle=col;mc.lineWidth=2.5;mc.lineJoin='round';
   mc.beginPath();
-  for(let i=0;i<MH;i++){const x=i/(MH-1)*w,y=base-msm[i]/mx*amp;i?mc.lineTo(x,y):mc.moveTo(x,y)}
+  for(let i=0;i<n;i++)i?mc.lineTo(X(i),Y(i)):mc.moveTo(X(i),Y(i));
   mc.stroke();
-  mc.fillStyle=col;
-  mpeaks.forEach(i=>{mc.beginPath();mc.arc(i/(MH-1)*w,base-msm[i]/mx*amp,4,0,6.3);mc.fill()});
 }
-
-const rh=[],et=[],ev=[];
-// Beat rate from the autocorrelation of the (log, detrended) envelope since the last strike
-function estRate(){
-  let mx=0,mi=0;for(let i=0;i<MH;i++)if(msm[i]>mx){mx=msm[i];mi=i}
-  if(mx<0.002)return null;
-  let b=MH-1;while(b>mi&&msm[b]<0.06*mx)b--;
-  const a=Math.min(MH-1,mi+19),n=b-a+1;
+function setMicState(s){
+  mstate=s;
+  micRec.hidden=!micOn||s==='done';
+  micPhase.textContent=s==='wait'?'Жду удара: ударьте интервал на рояле':s==='rec'?'Идёт запись звука…':'Слушаю микрофон';
+  measBtn.textContent=s==='wait'?'Отмена':s==='rec'?'Закончить запись (не раньше 3 с)':s==='done'?'Измерить ещё раз':'Измерить: ударьте интервал';
+}
+function fft(re,im){
+  const n=re.length;
+  for(let i=1,j=0;i<n;i++){
+    let bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;
+    if(i<j){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t}
+  }
+  for(let len=2;len<=n;len<<=1){
+    const ang=-2*Math.PI/len,wr=Math.cos(ang),wi=Math.sin(ang),hl=len>>1;
+    for(let i=0;i<n;i+=len){
+      let cr=1,ci=0;
+      for(let k=0;k<hl;k++){
+        const a=i+k,b=a+hl,vr=re[b]*cr-im[b]*ci,vi=re[b]*ci+im[b]*cr;
+        re[b]=re[a]-vr;im[b]=im[a]-vi;re[a]+=vr;im[a]+=vi;
+        const t=cr*wr-ci*wi;ci=cr*wi+ci*wr;cr=t;
+      }
+    }
+  }
+}
+function box(a,L){
+  const n=a.length,c=new Float64Array(n+1),o=new Float64Array(n),h=L>>1;
+  for(let i=0;i<n;i++)c[i+1]=c[i]+a[i];
+  for(let i=0;i<n;i++){const lo=Math.max(0,i-h),hi=Math.min(n,i+h+1);o[i]=(c[hi]-c[lo])/(hi-lo)}
+  return o;
+}
+// Beat rate from the autocorrelation of the log, detrended envelope (16 ms steps)
+function estRateFrom(e){
+  let mx=0;for(let i=0;i<e.length;i++)if(e[i]>mx)mx=e[i];
+  if(mx<=0)return null;
+  let b=e.length-1;while(b>0&&e[b]<0.06*mx)b--;
+  const n=b+1;
   if(n<160)return {short:true};
   const y=new Float32Array(n);
-  for(let i=0;i<n;i++)y[i]=Math.log(Math.max(msm[a+i],0.03*mx));
+  for(let i=0;i<n;i++)y[i]=Math.log(Math.max(e[i],0.03*mx));
   let sx=0,sy=0,sxx=0,sxy=0;
   for(let i=0;i<n;i++){sx+=i;sy+=y[i];sxx+=i*i;sxy+=i*y[i]}
   const sl=(n*sxy-sx*sy)/(n*sxx-sx*sx),ic=(sy-sl*sx)/n;
@@ -365,7 +394,7 @@ function estRate(){
   const kmin=8,kmax=Math.min(312,Math.floor(n/2));
   if(kmax<=kmin+2)return {short:true};
   const r=new Float32Array(kmax+2);
-  for(let k=0;k<=kmax+1&&k<n-2;k++){
+  for(let k=0;k<=kmax+1;k++){
     let s=0,e1=0,e2=0;
     for(let i=0;i+k<n;i++){s+=y[i]*y[i+k];e1+=y[i]*y[i];e2+=y[i+k]*y[i+k]}
     r[k]=s/Math.sqrt((e1*e2)||1);
@@ -373,55 +402,108 @@ function estRate(){
   const pk=[];let best=0;
   for(let k=kmin+1;k<=kmax;k++)if(r[k]>r[k-1]&&r[k]>=r[k+1]&&r[k]>0.1){pk.push(k);if(r[k]>best)best=r[k]}
   if(!pk.length)return null;
+  const rate=k=>{
+    const A=r[k-1],B=r[k],C=r[k+1],den=A-2*B+C,off=den<0?Math.max(-0.5,Math.min(0.5,0.5*(A-C)/den)):0;
+    return 1/((k+off)*0.016);
+  };
   const k0=pk.find(k=>r[k]>=0.6*best);
-  const A=r[k0-1],B=r[k0],C=r[k0+1],den=A-2*B+C,off=den<0?Math.max(-0.5,Math.min(0.5,0.5*(A-C)/den)):0;
-  return {rate:1/((k0+off)*0.016),conf:Math.max(0,Math.min(1,B)),n:n};
+  const main={rate:rate(k0),conf:Math.max(0,Math.min(1,r[k0]))};
+  const others=pk.filter(k=>k!==k0).map(k=>({rate:rate(k),conf:r[k]}))
+    .filter(c=>c.conf>=0.5*main.conf&&![2,3,4,5,6,7,8].some(m=>Math.abs(c.rate*m-main.rate)<0.08*main.rate)).slice(0,2);
+  return {rate:main.rate,conf:main.conf,others:others};
+}
+function analyse(x){
+  const sr=mSr,fa=pf(0,pairN);
+  if(x.length<2.5*sr)return {err:'\u0417\u0432\u0443\u043a \u0441\u043b\u0438\u0448\u043a\u043e\u043c \u043a\u043e\u0440\u043e\u0442\u043a\u0438\u0439: \u043d\u0443\u0436\u043d\u043e \u0445\u043e\u0442\u044f \u0431\u044b 3 \u0441\u0435\u043a\u0443\u043d\u0434\u044b \u043f\u043e\u0441\u043b\u0435 \u0443\u0434\u0430\u0440\u0430.'};
+  // 1) find the partial precisely with one long FFT
+  let N=16384;while(N*2<=x.length&&N<65536)N*=2;
+  const re=new Float64Array(N),im=new Float64Array(N);
+  for(let i=0;i<N;i++)re[i]=x[i]*(0.5-0.5*Math.cos(2*Math.PI*i/N));
+  fft(re,im);
+  const bw=sr/N,lo=Math.max(2,Math.floor(fa*0.96/bw)),hi=Math.ceil(fa*1.04/bw);
+  let bi=lo,bpw=0;const pw=[];
+  for(let k=lo;k<=hi;k++){const p=re[k]*re[k]+im[k]*im[k];pw.push(p);if(p>bpw){bpw=p;bi=k}}
+  const med=[...pw].sort((a,b)=>a-b)[pw.length>>1]||1e-30;
+  if(bpw<20*med)return {err:'\u041d\u0435 \u0441\u043b\u044b\u0448\u0443 \u0433\u0430\u0440\u043c\u043e\u043d\u0438\u043a\u0443 \u043e\u043a\u043e\u043b\u043e '+Math.round(fa)+' \u0413\u0446. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u043d\u043e\u0442\u044b \u043d\u0430 \u0440\u0443\u0447\u043a\u0430\u0445, \u043f\u043e\u0434\u0432\u0438\u043d\u044c\u0442\u0435 \u0442\u0435\u043b\u0435\u0444\u043e\u043d \u0431\u043b\u0438\u0436\u0435 \u0438 \u0443\u0434\u0430\u0440\u044c\u0442\u0435 \u0441\u0438\u043b\u044c\u043d\u0435\u0435.'};
+  let sw=0,sf=0;const span=Math.ceil(15/bw);
+  for(let k=Math.max(1,bi-span);k<=bi+span;k++){const p=re[k]*re[k]+im[k]*im[k];sw+=p;sf+=p*k*bw}
+  const fc=sf/sw;
+  // 2) demodulate at fc, low-pass (two boxcars, first null near 30 Hz), envelope every 16 ms
+  const M=x.length,w=2*Math.PI*fc/sr;
+  let I=new Float64Array(M),Q=new Float64Array(M);
+  for(let n=0;n<M;n++){I[n]=x[n]*Math.cos(w*n);Q[n]=x[n]*Math.sin(w*n)}
+  const L=Math.max(4,Math.round(sr/30));
+  I=box(box(I,L),L);Q=box(box(Q,L),L);
+  const hop=Math.round(0.016*sr),e=[];
+  for(let k=2*L;k<M-2*L;k+=hop)e.push(Math.hypot(I[k],Q[k]));
+  const env=Float32Array.from(e);
+  return {fc:fc,env:env,r:estRateFrom(env),dur:M/sr+0.5};
+}
+function showResult(res){
+  setMicState('done');mfroz=null;
+  const f1=v=>v.toFixed(1).replace('.',','),f2=v=>v.toFixed(2).replace('.',',');
+  if(res.err||!res.r||res.r.short||!res.r.rate){
+    micNum.textContent='\u2014';
+    micCap.textContent=res.err||(res.r&&res.r.short?'\u0417\u0432\u0443\u043a \u0441\u043b\u0438\u0448\u043a\u043e\u043c \u043a\u043e\u0440\u043e\u0442\u043a\u0438\u0439: \u043d\u0443\u0436\u043d\u043e \u0445\u043e\u0442\u044f \u0431\u044b 3 \u0441\u0435\u043a\u0443\u043d\u0434\u044b \u043f\u043e\u0441\u043b\u0435 \u0443\u0434\u0430\u0440\u0430.':'\u0411\u0438\u0435\u043d\u0438\u0439 \u043d\u0435 \u0432\u0438\u0434\u043d\u043e: \u043e\u0433\u0438\u0431\u0430\u044e\u0449\u0430\u044f \u0437\u0432\u0443\u043a\u0430 \u0440\u043e\u0432\u043d\u0430\u044f \u0438\u043b\u0438 \u0441\u043b\u0438\u0448\u043a\u043e\u043c \u0448\u0443\u043c\u043d\u0430\u044f.');
+    if(res.fc)micStat.textContent='\u0413\u0430\u0440\u043c\u043e\u043d\u0438\u043a\u0430 \u2248 '+f1(res.fc)+' \u0413\u0446';
+    return;
+  }
+  mfroz=res.env;
+  const r=res.r;
+  micNum.textContent=f2(r.rate);
+  micStat.textContent='\u0413\u0430\u0440\u043c\u043e\u043d\u0438\u043a\u0430 \u2248 '+f1(res.fc)+' \u0413\u0446 ('+noteName(Math.round(69+12*Math.log2(res.fc/A4)))+'), \u0437\u0430\u043f\u0438\u0441\u0430\u043d\u043e '+f1(res.dur)+' \u0441';
+  micCap.textContent='\u0431\u0438\u0435\u043d\u0438\u0439 \u0432 \u0441\u0435\u043a\u0443\u043d\u0434\u0443 (\u0443\u0432\u0435\u0440\u0435\u043d\u043d\u043e\u0441\u0442\u044c '+Math.round(r.conf*100)+'%'+(r.conf<0.4?' \u2014 \u043d\u0438\u0437\u043a\u0430\u044f, \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 \u043d\u0435\u0442\u043e\u0447\u043d\u044b\u0439':'')+')'+(r.others.length?'. \u0412\u043e\u0437\u043c\u043e\u0436\u043d\u043e \u0442\u0430\u043a\u0436\u0435: '+r.others.map(c=>f2(c.rate)).join(', '):'');
+}
+function finishRec(){
+  setMicState('analysing');
+  const startS=mOnset+Math.round(0.5*mSr);
+  const parts=[];let tot=0;
+  for(const c of mchunks){
+    if(c.s+c.d.length<=startS)continue;
+    const seg=c.d.subarray(Math.max(0,startS-c.s));parts.push(seg);tot+=seg.length;
+  }
+  const x=new Float32Array(tot);let p=0;for(const s of parts){x.set(s,p);p+=s.length}
+  mchunks=[];
+  micPhase.textContent='\u0421\u0447\u0438\u0442\u0430\u044e\u2026';micRec.hidden=false;
+  setTimeout(()=>{showResult(analyse(x))},30);
 }
 function micFrame(t){
   if(!micOn)return;
-  if(mlast)macc+=Math.min(0.25,(t-mlast)/1000);mlast=t;
-  if(t-mfreqT>120){
-    mfreqT=t;
-    const fa=pf(0,pairN),bw=micCtx.sampleRate/micAn.fftSize;
-    micAn.getFloatFrequencyData(mspec);
-    const lo=Math.max(1,Math.floor(fa*0.97/bw)),hi=Math.min(mspec.length-2,Math.ceil(fa*1.03/bw));
-    let bi=lo;for(let i=lo;i<=hi;i++)if(mspec[i]>mspec[bi])bi=i;
-    const a=mspec[bi-1],b=mspec[bi],c=mspec[bi+1],den=a-2*b+c,off=den?0.5*(a-c)/den:0;
-    mfp=(bi+off)*bw;mdb=b;
-    lvlEl.style.width=Math.max(0,Math.min(100,(mdb+90)/60*100))+'%';
-    if(Math.abs(fa-mtgt)>fa*0.004){mtgt=fa;mfc=0;bp.frequency.setTargetAtTime(fa,micCtx.currentTime,0.05)}
-    if(mdb>-70&&(mfc===0||Math.abs(mfp-mfc)>mfc*0.012)){mfc=mfp;bp.frequency.setTargetAtTime(mfc,micCtx.currentTime,0.3)}
-    bp.Q.setTargetAtTime(Math.max(6,Math.min(60,(mfc||fa)/20)),micCtx.currentTime,0.1);
-    micStat.textContent='Слушаю гармонику около '+Math.round(mfp)+' Гц ('+noteName(Math.round(69+12*Math.log2(mfp/A4)))+')'+(mdb<-75?' — сигнал слабый, поднесите микрофон ближе или ударьте сильнее':'');
+  const now=t/1000,fa=pf(0,pairN);
+  if(Math.abs(fa-mtgt)>fa*0.004){
+    mtgt=fa;bp.frequency.setTargetAtTime(fa,micCtx.currentTime,0.05);
+    bp.Q.setTargetAtTime(Math.max(2,Math.min(30,fa/60)),micCtx.currentTime,0.05);
+    if(mstate!=='done')micStat.textContent='\u0421\u043b\u0443\u0448\u0430\u044e \u0433\u0430\u0440\u043c\u043e\u043d\u0438\u043a\u0443 \u043e\u043a\u043e\u043b\u043e '+Math.round(fa)+' \u0413\u0446 ('+noteName(Math.round(69+12*Math.log2(fa/A4)))+')';
   }
   micEnv.getFloatTimeDomainData(mtbuf);
-  {
-    let m=0;for(let i=0;i<mtbuf.length;i++){const v=Math.abs(mtbuf[i]);if(v>m)m=v}
-    et.push(t/1000);ev.push(m);
-    while(et.length>1&&et[0]<t/1000-(MH*0.016+1)){et.shift();ev.shift()}
-    const now=t/1000;let j=0;
-    for(let i=0;i<MH;i++){
-      const tt=now-(MH-1-i)*0.016;
-      while(j<et.length-2&&et[j+1]<tt)j++;
-      if(et.length<2||tt<et[0]){msm[i]=0;continue}
-      const f=(tt-et[j])/((et[j+1]-et[j])||1);
-      msm[i]=ev[j]+(ev[j+1]-ev[j])*Math.min(1,Math.max(0,f));
-    }
+  let m=0;for(let i=0;i<mtbuf.length;i++){const v=Math.abs(mtbuf[i]);if(v>m)m=v}
+  et.push(now);ev.push(m);
+  while(et.length>1&&et[0]<now-(MH*0.016+1)){et.shift();ev.shift()}
+  let j=0;
+  for(let i=0;i<MH;i++){
+    const tt=now-(MH-1-i)*0.016;
+    while(j<et.length-2&&et[j+1]<tt)j++;
+    if(et.length<2||tt<et[0]){msm[i]=0;continue}
+    const f=(tt-et[j])/((et[j+1]-et[j])||1);
+    msm[i]=ev[j]+(ev[j+1]-ev[j])*Math.min(1,Math.max(0,f));
   }
-  if(t-mrateT>250){
-    mrateT=t;mpeaks=[];
-    const r=estRate(),base='биений в секунду по микрофону';
-    if(r&&r.rate&&mdb>=-75){
-      rh.push(r.rate);if(rh.length>6)rh.shift();
-      const s=[...rh].sort((x,y)=>x-y),med=s[s.length>>1],spr=(s[s.length-1]-s[0])/2;
-      micNum.textContent=med.toFixed(2).replace('.',',');
-      micCap.textContent=base+' (разброс ±'+spr.toFixed(2).replace('.',',')+', уверенность '+Math.round(r.conf*100)+'%'+(r.conf<0.4?' — низкая, результат неточный':'')+')';
-    }else{
-      rh.length=0;micNum.textContent='—';
-      micCap.textContent=base+(r&&r.short?' (звук слишком короткий: нужно хотя бы 3 секунды после удара)':' (пока не удаётся измерить)');
+  lvlEl.style.width=Math.max(0,Math.min(100,(20*Math.log10(m+1e-6)+70)/50*100))+'%';
+  if(mstate==='wait'){
+    const vals=[];
+    for(let i=et.length-1;i>=0;i--){const age=now-et[i];if(age>1.3)break;if(age>0.15)vals.push(ev[i])}
+    vals.sort((a,b)=>a-b);
+    const base=vals.length?vals[vals.length>>1]:0;
+    if(vals.length>20&&m>Math.max(0.003,4*base)){
+      setMicState('rec');mOnset=mTotal-Math.round(0.12*mSr);mRecT0=now;mPeak=m;mLowT=0;
     }
+  }else if(mstate==='rec'){
+    const el=now-mRecT0;
+    if(m>mPeak)mPeak=m;
+    if(m<0.04*mPeak){if(!mLowT)mLowT=now}else mLowT=0;
+    micPhase.textContent='\u0418\u0434\u0451\u0442 \u0437\u0430\u043f\u0438\u0441\u044c: '+el.toFixed(1).replace('.',',')+' \u0441 \u0438\u0437 10';
+    if(el>=10||(el>=3.5&&mLowT&&now-mLowT>0.6))finishRec();
   }
-  drawMic();
+  if(mstate==='done'&&mfroz)drawMic(mfroz,mfroz.length);else drawMic(msm,MH);
   requestAnimationFrame(micFrame);
 }
 async function micStart(){
@@ -429,37 +511,59 @@ async function micStart(){
     try{if(navigator.audioSession)navigator.audioSession.type='play-and-record'}catch(_){}
     micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
   }catch(e){
-    clearTimeout(micTimer);micBox.hidden=false;micStat.textContent='Нет доступа к микрофону ('+(e&&e.name||'ошибка')+'). Разрешите его в браузере. Во встроенном просмотре приложения он может быть запрещён: откройте ссылку в обычном браузере.';
+    clearTimeout(micTimer);micBox.hidden=false;micStat.textContent='\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0443 ('+(e&&e.name||'\u043e\u0448\u0438\u0431\u043a\u0430')+'). \u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u0435 \u0435\u0433\u043e \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435. \u0412\u043e \u0432\u0441\u0442\u0440\u043e\u0435\u043d\u043d\u043e\u043c \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f \u043e\u043d \u043c\u043e\u0436\u0435\u0442 \u0431\u044b\u0442\u044c \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d: \u043e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0441\u0441\u044b\u043b\u043a\u0443 \u0432 \u043e\u0431\u044b\u0447\u043d\u043e\u043c \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435.';
     return;
   }
   micCtx=new (window.AudioContext||window.webkitAudioContext)();await micCtx.resume();
+  mSr=micCtx.sampleRate;
   const src=micCtx.createMediaStreamSource(micStream);
-  micAn=micCtx.createAnalyser();micAn.fftSize=16384;micAn.smoothingTimeConstant=0;
-  bp=micCtx.createBiquadFilter();bp.type='bandpass';bp.frequency.value=800;bp.Q.value=30;
+  bp=micCtx.createBiquadFilter();bp.type='bandpass';bp.frequency.value=800;bp.Q.value=13;
   micEnv=micCtx.createAnalyser();micEnv.fftSize=2048;
-  src.connect(micAn);src.connect(bp);bp.connect(micEnv);
-  mspec=new Float32Array(micAn.frequencyBinCount);mtbuf=new Float32Array(micEnv.fftSize);
-  mh.fill(0);msm.fill(0);mpeaks=[];mlast=0;macc=0;rh.length=0;et.length=0;ev.length=0;mfc=0;mtgt=0;
-  micOn=true;clearTimeout(micTimer);micRec.hidden=false;lvlBox.hidden=false;micBtn.textContent='Выключить микрофон';micBox.hidden=false;micNum.textContent='—';
+  micProc=micCtx.createScriptProcessor(4096,1,1);
+  const zero=micCtx.createGain();zero.gain.value=0;
+  mTotal=0;mchunks=[];
+  micProc.onaudioprocess=e=>{
+    const d=e.inputBuffer.getChannelData(0);
+    mchunks.push({s:mTotal,d:new Float32Array(d)});mTotal+=d.length;
+    if(mstate!=='rec')while(mchunks.length&&mTotal-mchunks[0].s>mSr*4)mchunks.shift();
+  };
+  src.connect(bp);bp.connect(micEnv);src.connect(micProc);micProc.connect(zero);zero.connect(micCtx.destination);
+  mtbuf=new Float32Array(micEnv.fftSize);
+  msm.fill(0);et.length=0;ev.length=0;mtgt=0;mfroz=null;
+  micOn=true;clearTimeout(micTimer);lvlBox.hidden=false;measBtn.disabled=false;
+  setMicState('live');
+  micBtn.textContent='\u0412\u044b\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d';micBox.hidden=false;micNum.textContent='\u2014';
+  micCap.textContent='\u0431\u0438\u0435\u043d\u0438\u0439 \u0432 \u0441\u0435\u043a\u0443\u043d\u0434\u0443 \u043f\u043e \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0443';
   sizeMic();requestAnimationFrame(micFrame);
 }
 function micStop(){
   micOn=false;
+  if(micProc){micProc.onaudioprocess=null;try{micProc.disconnect()}catch(_){}}
   if(micStream)micStream.getTracks().forEach(t=>t.stop());
   if(micCtx)micCtx.close();
-  micRec.hidden=true;lvlBox.hidden=true;micStream=micCtx=null;micBtn.textContent='Микрофон';micBox.hidden=true;
+  micRec.hidden=true;lvlBox.hidden=true;measBtn.disabled=true;micProc=micStream=micCtx=null;mchunks=[];
+  micBtn.textContent='\u041c\u0438\u043a\u0440\u043e\u0444\u043e\u043d';micBox.hidden=true;
   try{if(navigator.audioSession)navigator.audioSession.type='playback'}catch(_){}
 }
+measBtn.onclick=()=>{
+  if(!micOn)return;
+  if(mstate==='wait'){setMicState('live')}
+  else if(mstate==='rec'){if(performance.now()/1000-mRecT0>=3)finishRec()}
+  else if(mstate==='live'||mstate==='done'){
+    mchunks=[];mfroz=null;micNum.textContent='\u2014';micCap.textContent='\u0431\u0438\u0435\u043d\u0438\u0439 \u0432 \u0441\u0435\u043a\u0443\u043d\u0434\u0443 \u043f\u043e \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0443';
+    mtgt=0;setMicState('wait');
+  }
+};
 let micTimer=null;
 micBtn.onclick=()=>{
   if(micOn){micStop();return}
   if(playing)playBtn.click();
-  micBox.hidden=false;micNum.textContent='—';
-  micStat.textContent='Запрашиваю доступ к микрофону…';
+  micBox.hidden=false;micNum.textContent='\u2014';
+  micStat.textContent='\u0417\u0430\u043f\u0440\u0430\u0448\u0438\u0432\u0430\u044e \u0434\u043e\u0441\u0442\u0443\u043f \u043a \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0443\u2026';
   micBox.scrollIntoView({block:'nearest'});
   clearTimeout(micTimer);
-  micTimer=setTimeout(()=>{if(!micOn)micStat.textContent='Браузер не отвечает на запрос микрофона. Скорее всего, во встроенном просмотре он запрещён. Откройте ссылку в Safari или Chrome.'},6000);
-  micStart().catch(e=>{micStat.textContent='Ошибка микрофона: '+(e&&e.name||e)});
+  micTimer=setTimeout(()=>{if(!micOn)micStat.textContent='\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043d\u0435 \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442 \u043d\u0430 \u0437\u0430\u043f\u0440\u043e\u0441 \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0430. \u0421\u043a\u043e\u0440\u0435\u0435 \u0432\u0441\u0435\u0433\u043e, \u0432\u043e \u0432\u0441\u0442\u0440\u043e\u0435\u043d\u043d\u043e\u043c \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435 \u043e\u043d \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d. \u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0441\u0441\u044b\u043b\u043a\u0443 \u0432 Safari \u0438\u043b\u0438 Chrome.'},6000);
+  micStart().catch(e=>{micStat.textContent='\u041e\u0448\u0438\u0431\u043a\u0430 \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0430: '+(e&&e.name||e)});
 };
 addEventListener('resize',()=>{sizeScope();drawScope()});
 sizeScope();drawScope();
