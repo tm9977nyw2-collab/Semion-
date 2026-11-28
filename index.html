@@ -103,7 +103,7 @@ button:disabled{opacity:.5;cursor:default}
   <div class="num" id="micnum">—</div>
   <div class="cap" id="miccap">биений в секунду по микрофону</div>
   <canvas id="micscope" role="img" aria-label="Биения с микрофона"></canvas>
-  <div class="row" style="margin-top:12px"><button class="main" id="measure" disabled>Измерить: ударьте интервал</button></div>
+  <div class="row" style="margin-top:12px"><button class="main" id="measure" disabled>Измерить: ударьте интервал</button><button id="measnow" disabled>Записать 10 с сразу</button></div>
   <div class="scopecap">Выставите ручками ноту 1 (и ноту 2), которые играете. Нажмите «Измерить», ударьте интервал на рояле и дайте звуку звучать до 10 секунд. Результат считается один раз по всей записи. Синтезатор лучше остановить, чтобы он не попадал в микрофон.</div>
 </div>
 
@@ -319,13 +319,13 @@ function scopeStart(){if(!srun){srun=true;slast=0;requestAnimationFrame(scopeFra
 
 // Microphone mode: strike the interval, record up to 10 s of raw sound, analyse it once
 let micOn=false,micCtx=null,micEnv=null,bp=null,micStream=null,micProc=null,mtbuf=null,mSr=48000;
-let mstate='live',mTotal=0,mchunks=[],mOnset=0,mRecT0=0,mLowT=0,mPeak=0,mtgt=0,mfroz=null;
+let mstate='live',mTotal=0,mchunks=[],mOnset=0,mRecT0=0,mLowT=0,mPeak=0,mtgt=0,mfroz=null,mFixed=false;
 const MH=625,msm=new Float32Array(MH),et=[],ev=[];
 const mcv=document.getElementById('micscope'),mc=mcv.getContext('2d');
 const micBox=document.getElementById('micbox'),micBtn=document.getElementById('mic');
 const micStat=document.getElementById('micstat'),micNum=document.getElementById('micnum');
 const micRec=document.getElementById('micrec'),lvlBox=document.getElementById('lvlbox'),lvlEl=document.getElementById('lvl'),micCap=document.getElementById('miccap');
-const micPhase=document.getElementById('micphase'),measBtn=document.getElementById('measure');
+const micPhase=document.getElementById('micphase'),measBtn=document.getElementById('measure'),measNow=document.getElementById('measnow');
 function sizeMic(){
   const r=window.devicePixelRatio||1,w=mcv.clientWidth,h=mcv.clientHeight;
   if(!w)return;mcv.width=Math.round(w*r);mcv.height=Math.round(h*r);mc.setTransform(r,0,0,r,0,0);
@@ -456,16 +456,25 @@ function showResult(res){
 }
 function finishRec(){
   setMicState('analysing');
-  const startS=mOnset+Math.round(0.5*mSr);
   const parts=[];let tot=0;
   for(const c of mchunks){
-    if(c.s+c.d.length<=startS)continue;
-    const seg=c.d.subarray(Math.max(0,startS-c.s));parts.push(seg);tot+=seg.length;
+    if(c.s+c.d.length<=mOnset)continue;
+    const seg=c.d.subarray(Math.max(0,mOnset-c.s));parts.push(seg);tot+=seg.length;
   }
-  const x=new Float32Array(tot);let p=0;for(const s of parts){x.set(s,p);p+=s.length}
+  const all=new Float32Array(tot);let p=0;for(const q of parts){all.set(q,p);p+=q.length}
   mchunks=[];
-  micPhase.textContent='\u0421\u0447\u0438\u0442\u0430\u044e\u2026';micRec.hidden=false;
-  setTimeout(()=>{showResult(analyse(x))},30);
+  micPhase.textContent='Считаю…';micRec.hidden=false;
+  setTimeout(()=>{
+    // find the strike inside the recording: walk back from the loudest 20 ms block while it is still loud
+    const W=Math.round(0.02*mSr),nb=Math.floor(all.length/W),rms=new Float32Array(nb);
+    for(let k=0;k<nb;k++){let e=0;for(let i=k*W;i<(k+1)*W;i++)e+=all[i]*all[i];rms[k]=Math.sqrt(e/W)}
+    const sm=rms.map((v,k)=>(v+(rms[k-1]??v)+(rms[k+1]??v))/3);
+    let pk=0;for(let k=1;k<nb;k++)if(sm[k]>sm[pk])pk=k;
+    const noise=[...sm].sort((a,b)=>a-b)[Math.floor(0.1*nb)]||0,thr=noise+0.35*(sm[pk]-noise);
+    let on=pk;while(on>0&&sm[on-1]>thr)on--;
+    const x=all.subarray(Math.min(all.length,on*W+Math.round(0.5*mSr)));
+    showResult(analyse(x));
+  },30);
 }
 function micFrame(t){
   if(!micOn)return;
@@ -487,21 +496,25 @@ function micFrame(t){
     const f=(tt-et[j])/((et[j+1]-et[j])||1);
     msm[i]=ev[j]+(ev[j+1]-ev[j])*Math.min(1,Math.max(0,f));
   }
-  lvlEl.style.width=Math.max(0,Math.min(100,(20*Math.log10(m+1e-6)+70)/50*100))+'%';
+  const db=Math.round(20*Math.log10(m+1e-6));
+  lvlEl.style.width=Math.max(0,Math.min(100,(db+90)/60*100))+'%';
+  if(mstate==='live'||mstate==='wait'){
+    micPhase.textContent=(mstate==='wait'?'Жду удара':'Слушаю микрофон')+' (уровень '+db+' дБ'+(db<-85?': сигнала почти нет, проверьте разрешение микрофона':db<-60?': тихо, поднесите телефон ближе':'')+')';
+  }
   if(mstate==='wait'){
     const vals=[];
     for(let i=et.length-1;i>=0;i--){const age=now-et[i];if(age>1.3)break;if(age>0.15)vals.push(ev[i])}
     vals.sort((a,b)=>a-b);
     const base=vals.length?vals[vals.length>>1]:0;
-    if(vals.length>20&&m>Math.max(0.003,4*base)){
-      setMicState('rec');mOnset=mTotal-Math.round(0.12*mSr);mRecT0=now;mPeak=m;mLowT=0;
+    if(vals.length>20&&m>Math.max(0.0004,4*base)){
+      setMicState('rec');mFixed=false;mOnset=mTotal-Math.round(0.12*mSr);mRecT0=now;mPeak=m;mLowT=0;
     }
   }else if(mstate==='rec'){
     const el=now-mRecT0;
     if(m>mPeak)mPeak=m;
     if(m<0.04*mPeak){if(!mLowT)mLowT=now}else mLowT=0;
     micPhase.textContent='\u0418\u0434\u0451\u0442 \u0437\u0430\u043f\u0438\u0441\u044c: '+el.toFixed(1).replace('.',',')+' \u0441 \u0438\u0437 10';
-    if(el>=10||(el>=3.5&&mLowT&&now-mLowT>0.6))finishRec();
+    if(el>=10||(!mFixed&&el>=3.5&&mLowT&&now-mLowT>0.6))finishRec();
   }
   if(mstate==='done'&&mfroz)drawMic(mfroz,mfroz.length);else drawMic(msm,MH);
   requestAnimationFrame(micFrame);
@@ -511,10 +524,13 @@ async function micStart(){
     try{if(navigator.audioSession)navigator.audioSession.type='play-and-record'}catch(_){}
     micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
   }catch(e){
+    try{micCtx&&micCtx.close()}catch(_){}micCtx=null;
     clearTimeout(micTimer);micBox.hidden=false;micStat.textContent='\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0443 ('+(e&&e.name||'\u043e\u0448\u0438\u0431\u043a\u0430')+'). \u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u0435 \u0435\u0433\u043e \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435. \u0412\u043e \u0432\u0441\u0442\u0440\u043e\u0435\u043d\u043d\u043e\u043c \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f \u043e\u043d \u043c\u043e\u0436\u0435\u0442 \u0431\u044b\u0442\u044c \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d: \u043e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0441\u0441\u044b\u043b\u043a\u0443 \u0432 \u043e\u0431\u044b\u0447\u043d\u043e\u043c \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435.';
     return;
   }
-  micCtx=new (window.AudioContext||window.webkitAudioContext)();await micCtx.resume();
+  if(!micCtx)micCtx=new (window.AudioContext||window.webkitAudioContext)();
+  try{await micCtx.resume()}catch(_){}
+  if(micCtx.state!=='running'){micStat.textContent='Звук микрофона не запустился: нажмите «Микрофон» ещё раз.';micStream.getTracks().forEach(t=>t.stop());try{micCtx.close()}catch(_){}micCtx=micStream=null;return}
   mSr=micCtx.sampleRate;
   const src=micCtx.createMediaStreamSource(micStream);
   bp=micCtx.createBiquadFilter();bp.type='bandpass';bp.frequency.value=800;bp.Q.value=13;
@@ -530,7 +546,7 @@ async function micStart(){
   src.connect(bp);bp.connect(micEnv);src.connect(micProc);micProc.connect(zero);zero.connect(micCtx.destination);
   mtbuf=new Float32Array(micEnv.fftSize);
   msm.fill(0);et.length=0;ev.length=0;mtgt=0;mfroz=null;
-  micOn=true;clearTimeout(micTimer);lvlBox.hidden=false;measBtn.disabled=false;
+  micOn=true;clearTimeout(micTimer);lvlBox.hidden=false;measBtn.disabled=false;measNow.disabled=false;
   setMicState('live');
   micBtn.textContent='\u0412\u044b\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d';micBox.hidden=false;micNum.textContent='\u2014';
   micCap.textContent='\u0431\u0438\u0435\u043d\u0438\u0439 \u0432 \u0441\u0435\u043a\u0443\u043d\u0434\u0443 \u043f\u043e \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0443';
@@ -541,7 +557,7 @@ function micStop(){
   if(micProc){micProc.onaudioprocess=null;try{micProc.disconnect()}catch(_){}}
   if(micStream)micStream.getTracks().forEach(t=>t.stop());
   if(micCtx)micCtx.close();
-  micRec.hidden=true;lvlBox.hidden=true;measBtn.disabled=true;micProc=micStream=micCtx=null;mchunks=[];
+  micRec.hidden=true;lvlBox.hidden=true;measBtn.disabled=true;measNow.disabled=true;micProc=micStream=micCtx=null;mchunks=[];
   micBtn.textContent='\u041c\u0438\u043a\u0440\u043e\u0444\u043e\u043d';micBox.hidden=true;
   try{if(navigator.audioSession)navigator.audioSession.type='playback'}catch(_){}
 }
@@ -554,10 +570,16 @@ measBtn.onclick=()=>{
     mtgt=0;setMicState('wait');
   }
 };
+measNow.onclick=()=>{
+  if(!micOn||mstate==='rec'||mstate==='analysing')return;
+  mchunks=[];mfroz=null;micNum.textContent='—';micCap.textContent='биений в секунду по микрофону';
+  mFixed=true;mOnset=mTotal;mRecT0=performance.now()/1000;mPeak=0;mLowT=0;setMicState('rec');
+};
 let micTimer=null;
 micBtn.onclick=()=>{
   if(micOn){micStop();return}
   if(playing)playBtn.click();
+  try{micCtx=new (window.AudioContext||window.webkitAudioContext)();micCtx.resume()}catch(_){micCtx=null}
   micBox.hidden=false;micNum.textContent='\u2014';
   micStat.textContent='\u0417\u0430\u043f\u0440\u0430\u0448\u0438\u0432\u0430\u044e \u0434\u043e\u0441\u0442\u0443\u043f \u043a \u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d\u0443\u2026';
   micBox.scrollIntoView({block:'nearest'});
